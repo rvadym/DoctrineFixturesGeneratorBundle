@@ -98,13 +98,13 @@ class DoctrineFixtureGenerator extends Generator
         $repo = $em->getRepository($class->name);
         if (empty($ids)) {
             $items = $repo->findAll();
-            $items = array_filter($items, function($item) use ($entityClass){
-               if (get_class($item) === $entityClass){
-                   return true;
-               } else{
-                   return false;
-               }
-            });
+//            $items = array_filter($items, function($item) use ($entityClass){
+//               if (get_class($item) === $entityClass){
+//                   return true;
+//               } else{
+//                   return false;
+//               }
+//            });
         } else {
             $items = $repo->{$this->getFindByIdentifier($class)}($ids);
         }

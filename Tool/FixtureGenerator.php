@@ -16,7 +16,6 @@ use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Mapping\ClassMetadataInfo;
 use Doctrine\ORM\PersistentCollection;
 use Webonaute\DoctrineFixturesGeneratorBundle\Annotation\ConstructorArguments;
-use Webonaute\DoctrineFixturesGeneratorBundle\Annotation\ConstructorDefaultArgument;
 use Webonaute\DoctrineFixturesGeneratorBundle\Annotation\Property;
 
 /**
@@ -75,7 +74,7 @@ use Doctrine\ORM\Mapping\ClassMetadata;
      */
     protected static $getItemFixtureTemplate
         = '
-    <spaces>$item<itemCount> = new <entityName>();<itemStubs>
+    <spaces>$item<itemCount> = new <entityName>(<entityContructorArgs>);<itemStubs>
     <spaces>$manager->persist($item<itemCount>);
 ';
 
@@ -333,34 +332,7 @@ use Doctrine\ORM\Mapping\ClassMetadata;
         $reflexion = new \ReflectionClass($item);
 
         /** @var array $constructorArguments */
-        $constructorArguments = [];
-
-        /** @var \ReflectionMethod $constructor */
-        if ($constructor = $reflexion->getConstructor()) {
-            /** @var AnnotationReader $reader */
-            $reader = new AnnotationReader();
-            /** @var ConstructorArguments $constructorArguments */
-            $constructorArgumentsAnnotation = $reader->getClassAnnotation(
-                $reflexion,
-                'Webonaute\DoctrineFixturesGeneratorBundle\Annotation\ConstructorArguments'
-            );
-
-            if ($constructorArgumentsAnnotation) {
-                foreach ($constructorArgumentsAnnotation->value as $k => $ca) {
-                    if (isset($ca['value'])) {
-                        $caValue = $ca['value'];
-                    } elseif (isset($ca['php'])) {
-                        eval('$caValue = ' . $ca['php'] . ';');
-                    } else {
-                        throw new \Exception(sprintf('Cannot determine constructor argument. [$s]', json_encode($ca)));
-                    }
-
-                    $constructorArguments[$k] = $caValue;
-                }
-            }
-        }
-
-        $properties = $this->getRecursiveProperties($reflexion);
+        $constructorArguments = $this->getEntityConstructorArgs($reflexion);
 
         if (count($constructorArguments) > 0) {
             $newInstance = $reflexion->newInstanceArgs($constructorArguments);
@@ -369,7 +341,9 @@ use Doctrine\ORM\Mapping\ClassMetadata;
         }
 
         $code .= "\n<spaces><spaces>\$this->addReference('{$this->referencePrefix}{$this->getEntityNameForRef($class)}{$ids}', \$item{$ids});";
-        
+
+        $properties = $this->getRecursiveProperties($reflexion);
+
         foreach ($properties as $property) {
             $setValue = null;
             $property->setAccessible(true);
@@ -642,6 +616,7 @@ use Doctrine\ORM\Mapping\ClassMetadata;
         $placeHolders = [
             '<itemCount>',
             '<entityName>',
+            '<entityContructorArgs>',
             '<itemStubs>',
         ];
 
@@ -650,12 +625,46 @@ use Doctrine\ORM\Mapping\ClassMetadata;
         $replacements = [
             $this->getRelatedIdsForReference(get_class($item), $item),
             $reflexionClass->getShortName(),
+            $this->getEntityConstructorArgs($reflexionClass, true),
             $this->generateFixtureItemStub($item),
         ];
 
         $code = str_replace($placeHolders, $replacements, self::$getItemFixtureTemplate);
 
         return $code;
+    }
+
+    /**
+     * @param \ReflectionClass $reflexion
+     * @param bool $asString
+     * @return array|string|ConstructorArguments
+     */
+    protected function getEntityConstructorArgs(\ReflectionClass $reflexion, $asString = false)
+    {
+        /** @var array $constructorArguments */
+        $constructorArguments = $asString ? '' : [];
+
+        /** @var \ReflectionMethod $constructor */
+        if ($constructor = $reflexion->getConstructor()) {
+            /** @var AnnotationReader $reader */
+            $reader = new AnnotationReader();
+            /** @var ConstructorArguments $constructorArguments */
+            $constructorArgumentsAnnotation = $reader->getClassAnnotation(
+                $reflexion,
+                'Webonaute\DoctrineFixturesGeneratorBundle\Annotation\ConstructorArguments'
+            );
+
+            if ($constructorArgumentsAnnotation) {
+                $constructorArguments = $constructorArgumentsAnnotation->getArguments($asString);
+            }
+        }
+
+        return $constructorArguments;
+    }
+
+    protected function convertArgumentsToString()
+    {
+
     }
 
     /**
@@ -672,17 +681,23 @@ use Doctrine\ORM\Mapping\ClassMetadata;
             foreach ($identifiers as $identifier) {
                 $method = "get".ucfirst($identifier);
                 if (method_exists($value, $method)){
-                    //change all - for _ in case identifier use UUID as '-' is not a permitted symbol
-                    $methodReturn = $value->$method();
+                    $identifierValue = $value->$method();
                 }else{
-                    $methodReturn = $value->$identifier;
+                    $identifierValue = $value->$identifier;
                 }
 
-                if (is_object($methodReturn)) {
-                    $methodReturn = get_class($methodReturn);
+                // Use __toString method if provided
+                if (is_object($identifierValue) && method_exists($identifierValue, '__toString')) {
+                    $identifierValue = (string) $identifierValue;
                 }
 
-                $ret .= $this->sanitizeSuspiciousSymbols($methodReturn);
+                // ManyToMany relation proxy Entity without ID
+                if (is_object($identifierValue)) {
+                    $identifierValue = $this->getRelatedIdsForReference(get_class($identifierValue), $identifierValue);
+                }
+
+                //change all - for _ in case identifier use UUID as '-' is not a permitted symbol
+                $ret .= $this->sanitizeSuspiciousSymbols($identifierValue);
             }
         }
 
